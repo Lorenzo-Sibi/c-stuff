@@ -2,6 +2,7 @@
 .AppleDouble
 .LSOverride
 .vscode/*
+./*.dSYM
 # Prerequisites
 *.d
 
