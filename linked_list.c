@@ -34,11 +34,9 @@ int List_push(LinkedList *l, ListItem *li)
     ListItem *aux = l->first;
     if (!aux)
     { // empty list
-        l->first = li;
-        l->last = li;
+        l->first = l->last = li;
         l->size++;
-        li->next = NULL;
-        li->prev = NULL;
+        li->next = li->prev = NULL;
         return 1;
     }
     // assert that aux->next == NULL
@@ -78,5 +76,7 @@ ListItem *List_remove(LinkedList *l, ListItem *li)
 // Remove the last element in the list
 ListItem *List_pop(LinkedList *l)
 {
+    if (l->size == 0 || l->last == NULL)
+        return NULL;
     return List_remove(l, l->last);
 }

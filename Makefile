@@ -3,8 +3,8 @@ make: sm-redis.c
 	gcc -Wall -Wextra -Og -g sm-redis.c -o sm-redis
 
 # Compilazione di list
-list: list.c
-	gcc -Wall -Wextra -Og -g list.c -o list
+list: linked_list.c
+	gcc -Wall -Wextra -Og -g linked_list.c -o linked_list
 
 # Compilazione del test per la lista collegata
 test_list: linked_list_test.c linked_list.c int_list.c linked_list.h int_list.h
