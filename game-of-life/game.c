@@ -3,36 +3,13 @@
 #include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
+#include <limits.h>
 
+#include "game.h"
+
+#include "raylib.h"
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
-
-
-#define SCREEN_WIDTH 1500
-#define SCREEN_HEIGHT 1200
-#define COLS_NUM 70
-#define ROWS_NUM 50
-#define CELL_NUM (COLS_NUM * ROWS_NUM)
-#define FRAME_RATE 10 // Frames per second
-#define FRAME_TIME (1000000 / FRAME_RATE) // Milliseconds per frame
-
-#define CELL_SIZE 15 // Size of each cell in pixels
-
-#define ALIVE 'O'
-#define DEAD '.'
-#define ALIVE_COLOR WHITE
-#define DEAD_COLOR BLACK
-
-typedef struct {
-    int row;
-    int col;
-} Position;
-
-typedef struct {
-    char grid[CELL_NUM];
-    char next_grid[CELL_NUM];
-    bool running;
-} Game;
 
 void clear_terminal() {
 #if defined(_WIN32) || defined(_WIN64)
@@ -73,6 +50,7 @@ Position mouse_to_coord(Vector2 mousePosition) {
 void init_game(Game* game) {
     memset(game->grid, DEAD, sizeof(game->grid));
     memset(game->next_grid, DEAD, sizeof(game->next_grid));
+    game->generation = 0;
     game->running = false;
 }
 
@@ -125,19 +103,8 @@ char compute_next_state(char* grid, Position pos) {
     return next_state;
 }
 
-void render(Game* game) {
-    char* grid = game->grid; // Render only the 'old' grid
-    clear_terminal();
-    for(int row = 0; row < ROWS_NUM; row++) {
-        for(int col = 0; col < COLS_NUM; col++) {
-            printf("%c ", grid[coord_to_index((Position){row, col})]);
-        }
-        printf("\n");
-    }
-}
-
 /*
-The following function compute the next stato of the game based on the current state.
+The following function compute the next state of the game based on the current state.
 It should be called periodically, e.g., every FRAME_TIME microseconds.
 */
 void update(Game* game) {
@@ -149,6 +116,8 @@ void update(Game* game) {
         }
     }
     memcpy(game->grid, game->next_grid, sizeof(game->grid));
+    game->generation = (game->generation <= LONG_MAX) ? ++game->generation : LONG_MAX;
+
 }
 
 void game_step(Game* game) {
@@ -168,7 +137,6 @@ Game's controls:
 */
 int main(void) {
 
-
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Conway's Game of Life. Lorenzo Sibi's Implementation");
     SetTargetFPS(60);
 
@@ -180,7 +148,7 @@ int main(void) {
 
     Rectangle gridRect = { 20, 20, COLS_NUM * CELL_SIZE, ROWS_NUM * CELL_SIZE };
     Rectangle controlPanelRect = { gridRect.width + 30, 20, 200, 300 };
-    Rectangle statusRect = { gridRect.width + 30, 340, 200, 100 };
+    Rectangle statusRect = { gridRect.width + 30, 340, 300, 100 };
 
     while(!WindowShouldClose()) {
 
@@ -207,7 +175,9 @@ int main(void) {
 
         // Status
         GuiGroupBox(statusRect, "Status");
-        GuiLabel((Rectangle){gridRect.width + 40, 370, 160, 20}, "Generation: 0");
+        char generationText[35] = {0}; 
+        snprintf(generationText, sizeof(generationText), "Generation: %ld", game.generation);
+        GuiLabel((Rectangle){gridRect.width + 40, 370, 160, 20}, generationText);
 
         if(IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePosition, gridRect) && !game.running) {
             Position pos = mouse_to_coord(mouseCell);
