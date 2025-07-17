@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -15,10 +16,12 @@
 #define FRAME_RATE 10 // Frames per second
 #define FRAME_TIME (1000000 / FRAME_RATE) // Milliseconds per frame
 
+#define CELL_SIZE 15 // Size of each cell in pixels
+
 #define ALIVE 'O'
 #define DEAD '.'
-#define ALIVE_COLOR (Color)WHITE
-#define DEAD_COLOR (Color)BLACK
+#define ALIVE_COLOR WHITE
+#define DEAD_COLOR BLACK
 
 typedef struct {
     int row;
@@ -28,6 +31,7 @@ typedef struct {
 typedef struct {
     char grid[CELL_NUM];
     char next_grid[CELL_NUM];
+    bool running;
 } Game;
 
 void clear_terminal() {
@@ -69,6 +73,7 @@ Position mouse_to_coord(Vector2 mousePosition) {
 void init_game(Game* game) {
     memset(game->grid, DEAD, sizeof(game->grid));
     memset(game->next_grid, DEAD, sizeof(game->next_grid));
+    game->running = false;
 }
 
 char get_cell_state(char* grid, Position pos) {
@@ -80,6 +85,12 @@ Set a specific cell state given a game grid.
 */
 void set_cell_state(char* grid, Position pos, char state) {
     grid[coord_to_index(pos)] = state;
+}
+
+void toggle_cell_state(char* grid, Position pos) {
+    char currentState = get_cell_state(grid, pos);
+    char newState = (currentState == ALIVE) ? DEAD : ALIVE;
+    set_cell_state(grid, pos, newState);
 }
 
 /*
@@ -140,46 +151,97 @@ void update(Game* game) {
     memcpy(game->grid, game->next_grid, sizeof(game->grid));
 }
 
-void start_game(Game* game) {
-    while(1) {
-        update(game); // Update the game state
-        render(game); // Render the game state
-        usleep(FRAME_TIME); // Sleep for the frame time
-    }
+void game_step(Game* game) {
+    game->running = true;
+    update(game); // Update the game state
+    usleep(FRAME_TIME); // Sleep for the frame time
 }
+
+/*
+Game's controls:
+- reset of the game's cells (DONE)
+- start the game loop (DONE), when the game is started it is not possible to edit the cells
+- stop the game loop (DONE)
+- toggle the state of a cell with the mouse click (DONE)
+- toggle the state of multiple cells with the mouse cickhold (TODO - ADVANCED)
+
+*/
 int main(void) {
 
 
     InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Conway's Game of Life. Lorenzo Sibi's Implementation");
     SetTargetFPS(60);
 
-    Vector2 mousePosition = GetMousePosition();
-
-
     Game game;
     init_game(&game);
 
+    Vector2 mousePosition = GetMousePosition();
+    Vector2 mouseCell = { -1, -1 };
+
+    Rectangle gridRect = { 20, 20, COLS_NUM * CELL_SIZE, ROWS_NUM * CELL_SIZE };
+    Rectangle controlPanelRect = { gridRect.width + 30, 20, 200, 300 };
+    Rectangle statusRect = { gridRect.width + 30, 340, 200, 100 };
+
+    while(!WindowShouldClose()) {
+
+        mousePosition = GetMousePosition();
+
+        int gridResult = GuiGrid(gridRect, NULL, CELL_SIZE, 1, &mouseCell);
+        int controlsResult = GuiGroupBox(controlPanelRect, "Controls");
 
 
-/*  
-    set_cell_state((char*)game.grid, (Position){25, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){26, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){27, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){26, 24}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){27, 26}, ALIVE);
-    
-    set_cell_state((char*)game.grid, (Position){25, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){26, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){27, 25}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){27, 24}, ALIVE);
-    set_cell_state((char*)game.grid, (Position){26, 23}, ALIVE);
-    
-    
-    
-    render(&game); // Initial renders
-    sleep(2);
-    start_game(&game);
-    
-    */
+        // Control Buttons
+        int startButton = GuiButton((Rectangle){gridRect.width + 40, 60, 80, 30}, "START");
+        int pauseButton = GuiButton((Rectangle){gridRect.width + 40, 100, 80, 30}, "PAUSE");
+        int resetButton = GuiButton((Rectangle){gridRect.width + 40, 140, 80, 30}, "RESET");
+
+
+        if(startButton)
+            game.running = true;
+        if(pauseButton)
+            game.running = false;
+        if(resetButton) {
+            init_game(&game);
+            game.running = false;
+        }
+
+        // Status
+        GuiGroupBox(statusRect, "Status");
+        GuiLabel((Rectangle){gridRect.width + 40, 370, 160, 20}, "Generation: 0");
+
+        if(IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(mousePosition, gridRect) && !game.running) {
+            Position pos = mouse_to_coord(mouseCell);
+            toggle_cell_state(game.grid, pos);
+        }
+
+        ClearBackground(GetColor(GuiGetStyle(DEFAULT, BACKGROUND_COLOR)));
+        BeginDrawing();
+        
+        // For drawing the cells on the screen
+        for(int row = 0; row < ROWS_NUM; row++) {
+            for(int col = 0; col < COLS_NUM; col++) {
+                Position pos = {row, col};
+                char state = get_cell_state(game.grid, pos);
+                Rectangle cellRect = (Rectangle){
+                    gridRect.x + col * CELL_SIZE,
+                    gridRect.y + row * CELL_SIZE,
+                    CELL_SIZE,
+                    CELL_SIZE
+                };
+                DrawRectangleRec(cellRect, state == ALIVE ? ALIVE_COLOR : DEAD_COLOR);
+                DrawRectangleLinesEx(cellRect, 1.0f ,DARKGRAY);
+            }
+        }
+        
+        EndDrawing();
+
+        if(game.running) {
+            game_step(&game);
+        }
+    }
+
+    // Cleanup
+    CloseWindow();
+
     return 0;
 }
