@@ -1,0 +1,8 @@
+{
+    "name": "Lorenzo",
+    "age": 23,
+    "address": {
+        "city": "Viterbo",
+        "CAP": "01100"
+    }
+}
