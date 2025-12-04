@@ -21,7 +21,7 @@ typedef enum {
     JND_ERROR,
 } JNodeType;
 
-typedef struct JNode {
+typedef struct JsonNode {
     union {
         bool bvalue;
         double nvalue;
@@ -29,11 +29,14 @@ typedef struct JNode {
         const char *err_msg;
     } value;
 
-    struct JNode *first_child; // JDN_PROPERTY can ONLY have 2 children (one for the key and one for the value) while for JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL should be NULL
-    struct JNode *next_sibling;
+    struct JsonNode *first_child; // JDN_PROPERTY can ONLY have 2 children (one for the key and one for the value) while for JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL should be NULL
+    struct JsonNode *next_sibling;
+    
+    char *key; // Only used if the node is child of an JND_OBJ
+
     JNodeType type;
     size_t child_size;      // For JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL must be 0 while for JND_PROPERTY must be 2
-} JNode;
+} JsonNode;
 
 typedef struct {
     JToken **tokens;
@@ -41,8 +44,39 @@ typedef struct {
     size_t size;
 } JParser;
 
+JsonNode error_node = { 
+    .type = JND_ERROR, 
+    .value.err_msg = "Error message not set", 
+    .first_child = NULL, 
+    .next_sibling = NULL, 
+    .child_size = 0, 
+    .key = NULL 
+};
 
-JNode* jp_error(JNode *node, char* err_msg);
+// Parsing APIs
+JsonNode* jp_parse(const char *json_str, size_t len);
+JsonNode* jp_parse_file(const char*filename);
+JsonNode* jp_parse_obj(JLexer *lx);
+JsonNode* jp_parse_array(JLexer*lx);
+JsonNode* jp_parse_value(JLexer *lx);
+void jp_free_ast(JsonNode *root);
+
+// 
+static JsonNode* jp_create_node(JNodeType type);
+void jp_print_ast(JsonNode *root);
+
+// Utility functions
+char* read_file(const char *filename);
+
+
+static JsonNode* jp_create_node(JNodeType type) {
+    JsonNode *node = (JsonNode*)calloc(1, sizeof(JsonNode));
+    if (!node) return NULL;
+    node->type = type;
+    return node;
+}
+
+JsonNode* jp_error(JsonNode *node, char* err_msg);
 
 static inline bool jp_at_end(JParser *jp) { return !jp->p || jp->p >= jp->end; }
 static inline JToken *jp_peek(JParser *jp) {return jp_at_end(jp) ? jp->end : jp->p; }  // Returns the current char pointed by the lexer, '\0' otherwise
@@ -55,40 +89,9 @@ static inline JToken* jp_adv(JParser *jp) {
     return t;
 }
 
-void jp_add_child(JNode *father, JNode *child) {
-    if(!father || !child) return;
-    child->next_sibling = NULL; // reset next_sibling anyway to NULL
-    JNode *tmp = (JNode*)father->first_child;
-    if (!tmp) {
-        assert(father->child_size == 0 && "Bad father node initialization. Node's first_child is NULL but child_size not zero");
-        father->first_child = child;
-        father->child_size++;
-        return;
-    }
-    while(tmp->next_sibling)
-        tmp = tmp->next_sibling;
-    tmp->next_sibling = child;
-    father->child_size++;
-}
-
-void jp_node_init(JNode *n, JNodeType type) {
-    if (!n) return;
-    n->first_child = n->next_sibling = NULL;
-    n->type = type;
-    n->child_size = 0;
-}
-
-void jp_init_parser(JParser *jp, JToken **tokens, size_t size) {
-    assert(size > 0 && "Parser initialized with size <= 0");
-    int i = 0;
-    while (tokens[i]) i++;
-    assert(size == i && "Size argument mismatch");
-    assert(tokens[size - 1]->type == JTK_EOF && "The JSON token list should end with an EOF token");
-    jp->tokens = tokens;
-    jp->p = tokens[0]; jp->end = tokens[size - 1]; jp->size = size;
-}
-
-static const char* nname(JNodeType k){
+static const char* nname(const JsonNode *node){
+    if (!node) return "NULL";
+    JNodeType k = node->type;
     switch(k){
         case JND_ROOT_OBJ: return "ROOT"; case JND_OBJ : return "OBJ"; case JND_ARRAY: return "ARRAY"; case JND_PROPERTY: return "PROPERTY";
         case JND_STRING: return "STRING"; case JND_NUMBER: return "NUMBER"; case JND_ERROR: return "ERROR";
@@ -96,172 +99,216 @@ static const char* nname(JNodeType k){
     } return "?";
 }
 
-void jp_free_ast(JNode *root) {
+void jp_free_ast(JsonNode *root) {
     if (!root) return;
-    JNode *tmp = root;
-    while (tmp) {
-        tmp = tmp->first_child;
-        jp_free_ast(tmp);
-        tmp = tmp ? tmp->next_sibling : NULL;
-        jp_free_ast(tmp);
+    JsonNode *child = root->first_child;
+    while (child) {
+        JsonNode *next = child->next_sibling;
+        jp_free_ast(child);
+        child = next;
     }
-    printf("[DEBUG] Freeig %s node.\n", nname(root->type));
+    printf("[DEBUG] Freeing %s node.\n", nname(root));
+    if (root->key) free(root->key);
     free(root);
 }
 
 // TODO: change it to another name I don't like the value since here we're parsing STRINGS, NUMBERS and PRIMITIVES (BOOL/NULL)
-JNode* jp_parse_value(JToken *tok) {
-    JNode *value = (JNode*)malloc(sizeof(JNode));
-    switch (tok->type) {
-    case JTK_STRING:
-        jp_node_init(value, JND_STRING);
-        value->value.svalue = jl_string_to_utf8(tok, NULL);
-        break;
-    case JTK_NUMBER:
-        jp_node_init(value, JND_NUMBER);
-        jl_number_to_double(tok, &(value->value.nvalue));
-        break;
-    case JTK_FALSE:
-        jp_node_init(value, JND_BOOL);
-        value->value.bvalue = 0;
-        break;
-    case JTK_TRUE:
-        jp_node_init(value, JND_BOOL);
-        value->value.bvalue = 1;
-        break;
-    case JTK_NULL:
-        jp_node_init(value, JND_NULL);
-        value->value.bvalue = -1;
-        break;
-    default:
-        value = jp_error(value, "Error during value parsing. Not a valid value.");
-        break;
+JsonNode* jp_parse_value(JLexer *lx) {
+
+    // I know it's ugly but it's fuctional :) (maybe I' gonna change it later ... or maybe no!)
+    jl_skip_ws(lx);
+    if (jl_peek(lx) == '{')
+        return jp_parse_obj(lx);
+    else if (jl_peek(lx) == '[')
+        return jp_parse_array(lx);
+
+    JToken tok = jl_next(lx);
+
+    switch (tok.type) { // primitive values
+        case JTK_STRING: {
+            JsonNode *n = jp_create_node(JND_STRING);
+            n->value.svalue = jl_string_to_utf8(&tok, NULL);
+            return n;
+        }
+        case JTK_NUMBER: {
+            JsonNode *n = jp_create_node(JND_NUMBER);
+            jl_number_to_double(&tok, &n->value.nvalue);
+            return n;
+        }
+        case JTK_TRUE: {
+            JsonNode *n = jp_create_node(JND_BOOL);
+            n->value.bvalue = true;
+            return n;
+        }
+        case JTK_FALSE: {
+            JsonNode *n = jp_create_node(JND_BOOL);
+            n->value.bvalue = false;
+            return n;
+        }
+        case JTK_NULL: return jp_create_node(JND_NULL);
+        default: return NULL; // Error
     }
-    return value;
+   
 }
 
-JNode* jp_parse_array(JParser *jp) {
-    return NULL;
+JsonNode* jp_parse_array(JLexer *lx) {
+    JsonNode *array = jp_create_node(JND_ARRAY);
+    JsonNode *tail = NULL;
+
+    if (!array) return NULL;
+    JToken tok = jl_next(lx);
+    if (tok.type != JTK_LBRACK) return jp_error(array, "Expected [");
+    jl_skip_ws(lx);
+    if (jl_peek(lx) == ']') { // trivial case "[]"
+        jl_next(lx); // consume RBRACK
+        return array;
+    }
+    while(1) {
+        JsonNode *val = jp_parse_value(lx);
+        if (!val) goto error;
+
+        if (tail) tail->next_sibling = val;
+        else array->first_child = val;
+        tail = val;
+
+        tok = jl_next(lx);
+        if (tok.type == JTK_RBRACK) break;
+        if (tok.type == JTK_COMMA) continue;
+        goto error;
+
+    }
+    return array;
+error:
+    jp_free_ast(array);
+    return &error_node;
 }
 
-JNode* jp_error(JNode *node, char* err_msg) {
+// Enhance the error handling.
+//  1. the error node is already defined globally
+//  2. The error message should be dynamically allocated to avoid issues with string literals ???? ARE WE SURE????
+//  3. The functino should return a pointer to the error node
+//  4. Fix the parsing function and point out in which part of the token list and json string the error occurred.
+
+JsonNode* jp_error(JsonNode *node, char* err_msg) {
     assert(node && "error node cannot be NULL");
     node->type = JND_ERROR;
     node->value.err_msg = err_msg;
     return node;
 }
 
-void jp_print_ast(JNode* root, int tabs) {
-    JNode *tmp = root;
-    while(tmp) {
-        for(int i=0; i < tabs; i++)
-            printf("    ");
-        printf("\u2514\u2500");
-        printf(" %s \n", nname(tmp->type));
-        JNode* child = tmp->first_child;
-        while(child) { // print children
-            jp_print_ast(child, tabs + 1);
-            child = child->next_sibling;
-        }
-        tmp = tmp->next_sibling;
-        jp_print_ast(tmp, tabs);
+static void jp_print_ast_rec(JsonNode *node, bool last_flags[], unsigned depth) {
+    if (!node) return;
+    for (unsigned i = 0; i < depth; i++)
+        printf("%s", last_flags[i] ? "   " : "│  ");
+    printf("%s", (const char *)(depth ? (last_flags[depth] ? "└─ " : "├─ ") : "└─ ")); // branch connector
+
+    // node label + value
+    printf("%s", nname(node));
+    if (node->key) printf(" key=\"%s\"", node->key);
+    switch (node->type) {
+        case JND_STRING: printf(" : \"%s\"", node->value.svalue); break;
+        case JND_NUMBER: printf(" : %g", node->value.nvalue); break;
+        case JND_BOOL:   printf(" : %s", node->value.bvalue ? "true" : "false"); break;
+        case JND_NULL:   printf(" : null"); break;
+        case JND_ERROR:  printf(" : ERROR: %s", node->value.err_msg); break;
+        default: break; // objects/arrays already described by type
+    }
+    printf("\n");
+
+    // children
+    JsonNode *child = node->first_child;
+    while (child) {
+        last_flags[depth + 1] = (child->next_sibling == NULL);
+        jp_print_ast_rec(child, last_flags, depth + 1);
+        child = child->next_sibling;
     }
 }
+
+void jp_print_ast(JsonNode *root) {
+    bool last_flags[64] = {true}; // adjust depth if you expect deeper trees
+    printf("\n\n=== JSON AST ===\n");
+    jp_print_ast_rec(root, last_flags, 0);
+}
+
 
 // TODO: find a way to handle the errors which should be compatible with the error handling in jp_parse
-JNode* jp_parse_obj(JParser *jp) {
-    JNode *obj = (JNode*)malloc(sizeof(JNode));
+JsonNode* jp_parse_obj(JLexer *lx) {
+    JsonNode *obj = jp_create_node(JND_OBJ);
+    JsonNode *tail = NULL;
     if (!obj) return NULL;
 
-    jp_node_init(obj, JND_OBJ);
+    JToken tok = jl_next(lx);
+    
+    if (tok.type != JTK_LBRACE) return jp_error(obj, "Expected {");
 
-    JToken *tok = jp_adv(jp);
-    if (tok->type != JTK_LBRACE) return jp_error(obj, "Expected {");
-
-    tok = jp_peek(jp);
-    // trivial case "{}"
-    if (tok->type == JTK_RBRACE) {
-        tok = jp_adv(jp);
-        if (tok->type == JTK_EOF) return obj;
-        else return jp_error(obj, "\"{}\" JSON not terminating with EOF");
-    }
-
-    while (1) { 
-        JToken *tkey = jp_adv(jp);
-
-        if (tkey->type == JTK_RBRACE) {
-            tok = jp_adv(jp);
-            if (tok->type == JTK_EOF) return obj;
-            else return jp_error(obj, "\"{}\" JSON not terminating with EOF");
+    char *key = NULL;
+    char fflag = 1;
+    while(1) {
+        tok = jl_next(lx);
+        if (tok.type == JTK_RBRACE) break;
+        if(!fflag) {
+            if (tok.type != JTK_COMMA) goto error;  
+            tok = jl_next(lx);
         }
-
-        if (tkey->type != JTK_STRING) return jp_error(obj, "Expected string key");
-
-        JNode *key = jp_parse_value(tkey);
-        if (!key) return jp_error(obj, "Failed to parse key");
+        fflag = 0;
         
-        tok = jp_adv(jp);  
-        if (tok->type != JTK_COLON) {
-            jp_free_ast(key);
-            return jp_error(obj, "Expected colon key, got: ..."); // Error
+        if (tok.type != JTK_STRING) goto error;
+        
+        key = jl_string_to_utf8(&tok, NULL);
+        
+        tok = jl_next(lx);
+        if (tok.type != JTK_COLON)
+            goto error_k;
+        
+        JsonNode *val = jp_parse_value(lx);
+        if (!val)
+            goto error_k;
+        val->key = key;
+
+        if(tail) 
+            tail->next_sibling = val;
+        else
+            obj->first_child = val;
+        tail = val;
+    }
+    return obj;
+error_k:
+    free(key);
+error:
+    jp_free_ast(obj);
+    return NULL;
+}
+
+JsonNode* jp_parse(const char *json_str, size_t len) {
+    JLexer lx;
+    jl_init(&lx, json_str, len);
+
+    JToken tokens[MAX_TOKENS];
+    int i = 0;
+    for(;;){
+        tokens[i] = jl_next(&lx);
+        JToken t = tokens[i];
+        i++;
+        if (t.type == JTK_ERROR) {
+            fprintf(stderr, "ERROR: %s\n", t.err_msg ? t.err_msg : "token error");
+            return NULL;
         }
-
-        JToken *tvalue = jp_adv(jp);
-        JNode *value = NULL;
-
-        if(tvalue->type == JTK_LBRACK) value = jp_parse_array(jp);
-        else if (tvalue->type == JTK_LBRACE) value = jp_parse_obj(jp);
-        else value = jp_parse_value(tvalue); 
-
-        if (!value) {
-            jp_free_ast(key);
-            return jp_error(obj, "Failed to parse value");
-        }
-
-        JNode *property = (JNode*)malloc(sizeof(JNode));
-        if(!property) {
-            jp_free_ast(key);
-            jp_free_ast(value);
-            return jp_error(obj, "Memory allocation failed for propert node");
-        }
-
-        jp_node_init(property, JND_PROPERTY);
-        jp_add_child(property, key); 
-        jp_add_child(property, value);
-        assert(property->child_size == 2 && property->first_child->type == JND_STRING && "PropertyNode should have 2 children and a JDN_STRING as first_child");
-    
-        jp_add_child(obj, property);
-
-        // ok here we exit for sure
-        if (tok->type == JTK_RBRACE) break;
-        if (tok->type != JTK_COMMA) return jp_error(obj, "Expected comma or closing brace");
+        if (t.type == JTK_EOF) break;
     }
 
-
-}
-
-// IDEA: since parsing in the usual way could consume the memory since nested objects and arrays consume the stack
-// we can do the following:
-//      1. Through a simple state machine verify beforehand if the token list leads to a valid JSON syntax;do not proceed if an error occurs. 
-//         Should be O(t) where t is the number of tokens 
-//      2. "chunking" of objects and array: we can construct the AST for the simplest ones (the ones not nested) and then backtraking to the ones
-//         at the top. In this way, we build increasingly complex ASTs for object/array nodes, avoiding stack saturation in a single chain of calls.
-
-// Return the root JNode JND_ROOT_OBJ of the parsed JSON string 
-// TODO: modify the datastructure so to have a error code/msg and not just a NULL
-JNode* jp_parse(JParser *jp, JNode *root) {
-    if (jp_at_end(jp)) return jp_error(root, "Empty JSON file (EOF)");
-    
-    JToken *tok = jp_peek(jp);
-    if (tok->type != JTK_LBRACE && tok->type != JTK_LBRACK) return jp_error(root, "Bad starting brace/bracket");
-
-    // Let's implement only the case with Bracets "{ ... }"
-    root = jp_parse_obj(jp);
-    root->type = JND_ROOT_OBJ;
+    jl_init(&lx, json_str, len); // re-initialize lexer for parsing
+    JsonNode *root = jp_parse_obj(&lx);
     return root;
-
 }
 
+JsonNode* jp_parse_file(const char *filename) {
+    char *json_str = read_file(filename);
+    if (!json_str) return NULL;
+    size_t len = strlen(json_str);
+    JsonNode *root = jp_parse(json_str, len);
+    free(json_str);
+    return root;
+}
 
 char* read_file(const char *filename) {
     FILE *file = fopen(filename, "r");
@@ -278,81 +325,63 @@ char* read_file(const char *filename) {
     // Allocate memory and read
     char *content = malloc(length + 1);
     if (content) {
-        fread(content, 1, length, file);
+        unsigned int r = fread(content, 1, length, file);
+        if(r <= 0) {
+            if(ferror(file))
+                perror("Error reading file");
+            else
+                printf("Error: No data read from file %s\n", filename);
+            fclose(file);
+            free(content);
+            return NULL;
+        }
         content[length] = '\0';
     }
-    
     fclose(file);
     return content;
 }
 
 int main(int argc, char *argv[]) {
-
-    JParser jp;
-    JToken tokens[MAX_TOKENS];
-    char *json = NULL;
+    
     /*
-    if (argc > 2) {
-        if(strcmp(argv[1], "-f") == 0) { // from file
-        json = read_file(argv[2]);
-    } else if (strcmp(argv[1], "-l") == 0) { // from line
-    json = argv[2];
-}
-} else {
-    fprintf(stderr, "Usage: %s [-f] [-l] [FILENAME] [JSON STRING]\n", argv[0]);
-    exit(1);
-}
-*/
-
-    json = read_file("tests/test.json");
-
-    JLexer lx;
-    jl_init(&lx, json, strlen(json));
-    int i = 0;
-
-    for(;;){
-        tokens[i] = jl_next(&lx);
-        JToken t = tokens[i];
-        i++;
-        printf("%zu:%zu %-6s  '%.*s'\n", t.line, t.column, kname(t.type), (int)t.length, t.start);
-        if (t.type == JTK_STRING){
-            const char *err=NULL; char *s = jl_string_to_utf8(&t, &err);
-            if (s){ printf("       decoded: \"%s\"\n", s); free(s); }
-            else   printf("       decode error: %s\n", err?err:"(unknown)");
+    if (argc != 2) {
+        printf("Usage: %s <json_file>\n", argv[0]);
+        return 1;
+    }
+    */
+    
+    char *filename = "./tests/test.json";
+    
+    char *json = read_file(filename);
+    size_t json_len = strlen(json);
+    
+    JToken tokens[MAX_TOKENS];
+    
+    { // Lexing demo
+        JLexer lx;
+        jl_init(&lx, json, json_len);
+        int i = 0;
+        for(;;){
+            tokens[i] = jl_next(&lx);
+            JToken t = tokens[i];
+            i++;
+            printf("%zu:%zu %-6s  '%.*s'\n", t.line, t.column, kname(t.type), (int)t.length, t.start);
+            if (t.type == JTK_STRING){
+                const char *err = NULL;
+                char *s = jl_string_to_utf8(&t, &err);
+                if (s){ printf("       decoded: \"%s\"\n", s); free(s); }
+                else   printf("       decode error: %s\n", err ? err : "(unknown)");
+            }
+            if (t.type == JTK_NUMBER){ double v; if(jl_number_to_double(&t,&v)) printf("       number: %g\n", v); }
+            if (t.type == JTK_ERROR){ fprintf(stderr, "ERROR: %s\n", t.err_msg ? t.err_msg : "token error"); break; }
+            if (t.type == JTK_EOF) break;
         }
-        if (t.type == JTK_NUMBER){ double v; if(jl_number_to_double(&t,&v)) printf("       number: %g\n", v); }
-        if (t.type == JTK_ERROR){ fprintf(stderr, "ERROR: %s\n", t.err_msg ? t.err_msg : "token error"); break; }
-        if (t.type == JTK_EOF) break;
     }
 
-    JToken *token_ptrs[MAX_TOKENS] = { NULL };
-    for (int j = 0; j < i; j++)
-        token_ptrs[j] = &tokens[j];
+    JsonNode *root = jp_parse(json, json_len);
 
-    jp_init_parser(&jp, token_ptrs, i);
-
-    JNode *root = (JNode*)malloc(sizeof(JNode));
-    if(!root) {
-        perror("Failed allocating root");
-        exit(1);
-    }
-
-    root = jp_parse(&jp, root);
-
-    JNode root1, key1, key2, value1, value2;
-    jp_node_init(&root1, JND_ROOT_OBJ);
-    jp_node_init(&key1, JND_STRING);
-    jp_node_init(&key2, JND_STRING);
-    jp_node_init(&value1, JND_STRING);
-    jp_node_init(&value2, JND_STRING);
-
-    root1.first_child = &key1; root1.child_size = 1;
-    key1.first_child = &value1; key1.child_size = 1; key1.next_sibling = &key2;
-    key2.first_child = &value2; key2.child_size = 1;
-
-    jp_print_ast(root, 0);
-
-    printf("Node type %s\n", nname(root->type));
+    jp_print_ast(root);
+    printf("\n\n======== Node type: %s\n", nname(root));
     if (root->type == JND_ERROR)
         printf("Error message: %s\n", root->value.err_msg);
     return 0;
