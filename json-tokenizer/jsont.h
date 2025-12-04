@@ -155,7 +155,7 @@ static char* json_decode_string(const char *s, size_t n, const char **err_msg){
     // Worst case: every char escaped -> output <= n. Surrogates expand but still < 4*n.
     size_t cap = n * 4 + 4;
     char *out = (char*)malloc(cap);
-    if(!out) { if(err_msg) *err_msg="oom"; return NULL; }
+    if(!out) { if(err_msg) *err_msg = "oom"; return NULL; }
     char *w = out;
     const char *end = s + n;
     while (s < end){
