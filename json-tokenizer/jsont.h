@@ -68,8 +68,6 @@ static bool jl_consume_kw(JLexer *lx, const char *kw);
 JToken jl_next(JLexer *lx);
 
 
-
-
 static inline bool jl_at_end(JLexer *lx) { return lx->p >= lx->end; }
 static inline char jl_peek(JLexer *lx) {return jl_at_end(lx) ? '\0' : *lx->p; }  // Returns the current char pointed by the lexer, '\0' otherwise
 

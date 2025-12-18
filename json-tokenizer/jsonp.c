@@ -1,90 +1,10 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <stdint.h>
-#include <stdbool.h>
-#include <ctype.h>
-#include <assert.h>
-#include "jsont.h"
-
-#define MAX_TOKENS 1024
-
-typedef enum {
-    JND_ROOT_OBJ, JND_OBJ,
-    JND_PROPERTY, 
-    JND_ARRAY,
-    JND_STRING,
-    JND_NUMBER,
-    JND_BOOL,
-    JND_NULL,
-    JND_ERROR,
-} JNodeType;
-
-typedef struct JsonNode {
-    union {
-        bool bvalue;
-        double nvalue;
-        const char *svalue;
-        const char *err_msg;
-    } value;
-    struct JsonNode *first_child; // JDN_PROPERTY can ONLY have 2 children (one for the key and one for the value) while for JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL should be NULL
-    struct JsonNode *next_sibling;
-    char *key; // Only used if the node is child of an JND_OBJ
-    JNodeType type;
-    size_t child_size;      // For JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL must be 0 while for JND_PROPERTY must be 2
-} JsonNode;
-
-JsonNode error_node = { 
-    .type = JND_ERROR, 
-    .value.err_msg = "Error message not set", 
-    .first_child = NULL, 
-    .next_sibling = NULL, 
-    .child_size = 0, 
-    .key = NULL 
-};
-
-// Parsing APIs
-JsonNode* jp_parse(const char *json_str, size_t len);
-JsonNode* jp_parse_file(const char*filename);
-JsonNode* jp_parse_obj(JLexer *lx);
-JsonNode* jp_parse_array(JLexer*lx);
-JsonNode* jp_parse_value(JLexer *lx);
-JsonNode* jp_error(const char* err_msg);
-void jp_error_set_msg(const char* err_msg);
-bool jp_is_error(JsonNode *node);
-void jp_free_ast(JsonNode *root);
-
-// 
-static JsonNode* jp_create_node(JNodeType type);
-void jp_print_ast(JsonNode *root);
-
-// Utility functions
-char* read_file(const char *filename);
-
-// Enhance the error handling.
-//  DONE 1. the error node is already defined globally
-//  DONE - 3. The functino should return a pointer to the error node
-//  4. Fix the parsing function and point out in which part of the token list and json string the error occurred.
-inline JsonNode* jp_error(const char* err_msg) { jp_error_set_msg(err_msg); return &error_node; }
-inline void jp_error_set_msg(const char *err_msg) { err_msg = err_msg ? err_msg : "Error message not set"; char *copy = (char*)strcpy(err_msg, error_node.value.err_msg); }
-inline bool jp_is_error(JsonNode *node) { return node && node->type == JND_ERROR; }
-
+#include "jsonp.h"
 
 static JsonNode* jp_create_node(JNodeType type) {
     JsonNode *node = (JsonNode*)calloc(1, sizeof(JsonNode));
     if (!node) return NULL;
     node->type = type;
     return node;
-}
-
-static const char* nname(const JsonNode *node){
-    if (!node) return "NULL";
-    JNodeType k = node->type;
-    switch(k){
-        case JND_ROOT_OBJ: return "ROOT"; case JND_OBJ : return "OBJ"; case JND_ARRAY: return "ARRAY"; case JND_PROPERTY: return "PROPERTY";
-        case JND_STRING: return "STRING"; case JND_NUMBER: return "NUMBER"; case JND_ERROR: return "ERROR";
-        case JND_BOOL: return "BOOL"; case JND_NULL: return "NULL";
-    } return "?";
 }
 
 static void jp_print_ast_rec(JsonNode *node, bool last_flags[], unsigned depth) {
@@ -116,20 +36,23 @@ static void jp_print_ast_rec(JsonNode *node, bool last_flags[], unsigned depth) 
 }
 
 void jp_print_ast(JsonNode *root) {
-    bool last_flags[64] = {true}; // adjust depth if you expect deeper trees
+    bool last_flags[MAX_NESTING] = {true}; // adjust depth if you expect deeper trees
     printf("\n\n=== JSON AST ===\n");
     jp_print_ast_rec(root, last_flags, 0);
 }
 
 void jp_free_ast(JsonNode *root) {
     if (!root) return;
+    if (jp_is_error(root)) return; // !! Do not free global error node
     JsonNode *child = root->first_child;
     while (child) {
         JsonNode *next = child->next_sibling;
         jp_free_ast(child);
         child = next;
     }
-    printf("[DEBUG] Freeing %s node.\n", nname(root));
+    #ifdef DEBUG
+        printf("[DEBUG] Freeing %s node.\n", nname(root));
+    #endif
     if (root->key) free(root->key);
     free(root);
 }
@@ -177,7 +100,7 @@ JsonNode* jp_parse_array(JLexer *lx) {
 
     if (!array) return jp_error("oom (array)");
     JToken tok = jl_next(lx);
-    if (tok.type != JTK_LBRACK) return jp_error("Error. Expected '[' while array parsing.");
+    if (tok.type != JTK_LBRACK) return jp_error("Error. Expected [' while array parsing.");
     jl_skip_ws(lx);
     if (jl_peek(lx) == ']') { // trivial case "[]"
         jl_next(lx); // consume RBRACK
@@ -219,12 +142,18 @@ JsonNode* jp_parse_obj(JLexer *lx) {
         tok = jl_next(lx);
         if (tok.type == JTK_RBRACE) break;
         if(!fflag) {
-            if (tok.type != JTK_COMMA) goto error;  
+            if (tok.type != JTK_COMMA) {
+                jp_error_set_msg("Error. Expected COMMA between properties.");
+                goto error;
+            }
             tok = jl_next(lx);
         }
         fflag = 0;
         
-        if (tok.type != JTK_STRING) goto error;
+        if (tok.type != JTK_STRING) {
+            jp_error_set_msg("Error. Expected STRING as property key.");
+            goto error;
+        }
         
         key = jl_string_to_utf8(&tok, NULL);
         
@@ -246,6 +175,7 @@ JsonNode* jp_parse_obj(JLexer *lx) {
     return obj;
 error_k:
     free(key);
+    printf("FROM HEREEEE\n");
 error:
     jp_free_ast(obj);
     return jp_error(NULL);
@@ -285,35 +215,6 @@ JsonNode* jp_parse_file(const char *filename) {
     return root;
 }
 
-char* read_file(const char *filename) {
-    FILE *file = fopen(filename, "r");
-    if (file == NULL) {
-        printf("Error: Could not open file %s\n", filename);
-        return NULL;
-    }
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    
-    // Allocate memory and read
-    char *content = malloc(length + 1);
-    if (content) {
-        unsigned int r = fread(content, 1, length, file);
-        if(r <= 0) {
-            if(ferror(file))
-                fprintf(stderr, "Error reading file %s\n", filename);
-            else
-                fprintf(stderr, "Error: No data read from file %s\n", filename);
-            fclose(file);
-            free(content);
-            return NULL;
-        }
-        content[length] = '\0';
-    }
-    fclose(file);
-    return content;
-}
-
 int main(int argc, char *argv[]) {
     
     /*
@@ -323,9 +224,12 @@ int main(int argc, char *argv[]) {
     }
     */
     
-    char *filename = "./tests/test.json";
+    char *filename = "./tests/test_array.json";
     
     char *json = read_file(filename);
+    if(!json) {
+        return 1;
+    }
     size_t json_len = strlen(json);
     
     JToken tokens[MAX_TOKENS];

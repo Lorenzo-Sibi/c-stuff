@@ -14,11 +14,18 @@ TARGET = json_lib
 
 all: $(TARGET)
 
+$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+	
 tokenizer: jsont.c
 	gcc -Wall -Wextra -Og -g jsont.c -o jsont
 
 parser: jsonp.c jsont.h
 	gcc -Wall -Wextra -Og -g jsonp.c -o jsonp
+
+test: $(OBJS) $(TEST_OBJS)
+	$(CC) $(CFLAGS) -o test_runner $(TEST_OBJS) $(OBJS)
+	./test_runner
 
 clean:
 	rm -f jsont jsonp *.o
