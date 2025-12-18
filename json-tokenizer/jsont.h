@@ -5,6 +5,8 @@
 #include <stdbool.h>
 #include <ctype.h>
 
+#ifndef JSONT_H
+#define JSONT_H
 
 typedef enum {
     JTK_EOF = 0, JTK_ERROR,
@@ -352,6 +354,9 @@ static const char* kname(JTokenType k){
         case JTK_TRUE: return "TRUE"; case JTK_FALSE: return "FALSE"; case JTK_NULL: return "NULL";
     } return "?";
 }
+
+#endif
+
 #ifdef JSON_LEXER_DEMO
 
 int main(int argc, char**argv){

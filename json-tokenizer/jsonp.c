@@ -7,11 +7,10 @@ static JsonNode* jp_create_node(JNodeType type) {
     return node;
 }
 
-static void jp_print_ast_rec(JsonNode *node, bool last_flags[], unsigned depth) {
+static void jp_print_ast_rec(JsonNode *node, unsigned depth) {
     if (!node) return;
-    for (unsigned i = 0; i < depth; i++)
-        printf("%s", last_flags[i] ? "   " : "│  ");
-    printf("%s", (const char *)(depth ? (last_flags[depth] ? "└─ " : "├─ ") : "└─ ")); // branch connector
+    for (unsigned i = 0; i < depth; i++) printf("%s", "   ");
+    printf("%s", (const char *)(depth ? ((node->next_sibling == NULL) ? "└─ " : "├─ ") : "└─ ")); // branch connector
 
     // node label + value
     printf("%s", nname(node));
@@ -29,16 +28,15 @@ static void jp_print_ast_rec(JsonNode *node, bool last_flags[], unsigned depth) 
     // children
     JsonNode *child = node->first_child;
     while (child) {
-        last_flags[depth + 1] = (child->next_sibling == NULL);
-        jp_print_ast_rec(child, last_flags, depth + 1);
+        jp_print_ast_rec(child, depth + 1);
         child = child->next_sibling;
     }
 }
 
 void jp_print_ast(JsonNode *root) {
-    bool last_flags[MAX_NESTING] = {true}; // adjust depth if you expect deeper trees
+    if(!root) return;
     printf("\n\n=== JSON AST ===\n");
-    jp_print_ast_rec(root, last_flags, 0);
+    jp_print_ast_rec(root, 0);
 }
 
 void jp_free_ast(JsonNode *root) {
@@ -58,13 +56,14 @@ void jp_free_ast(JsonNode *root) {
 }
 
 // TODO: change it to another name I don't like the value since here we're parsing STRINGS, NUMBERS and PRIMITIVES (BOOL/NULL)
-JsonNode* jp_parse_value(JLexer *lx) {
+JsonNode* jp_parse_value(JLexer *lx, unsigned short int depth) {
     // I know it's ugly but it's fuctional :) (maybe I' gonna change it later ... or maybe no!)
+    if (depth > MAX_NESTING) return jp_error("maximum nesting reached.");
     jl_skip_ws(lx);
     if (jl_peek(lx) == '{')
-        return jp_parse_obj(lx);
+        return jp_parse_obj(lx, depth + 1);
     else if (jl_peek(lx) == '[')
-        return jp_parse_array(lx);
+        return jp_parse_array(lx, depth + 1);
 
     JToken tok = jl_next(lx);
 
@@ -94,11 +93,16 @@ JsonNode* jp_parse_value(JLexer *lx) {
     }
 }
 
-JsonNode* jp_parse_array(JLexer *lx) {
+JsonNode* jp_parse_array(JLexer *lx, unsigned short int depth) {
     JsonNode *array = jp_create_node(JND_ARRAY);
     JsonNode *tail = NULL;
 
     if (!array) return jp_error("oom (array)");
+    if (depth > MAX_NESTING) {
+        jp_error_set_msg("maximum nesting reached.");
+        goto error;
+    }
+
     JToken tok = jl_next(lx);
     if (tok.type != JTK_LBRACK) return jp_error("Error. Expected [' while array parsing.");
     jl_skip_ws(lx);
@@ -107,7 +111,7 @@ JsonNode* jp_parse_array(JLexer *lx) {
         return array;
     }
     while(1) {
-        JsonNode *val = jp_parse_value(lx);
+        JsonNode *val = jp_parse_value(lx, depth);
         if (jp_is_error(val) || !val) goto error;
 
         if (tail) tail->next_sibling = val;
@@ -127,10 +131,14 @@ error:
 }
 
 // TODO: find a way to handle the errors which should be compatible with the error handling in jp_parse
-JsonNode* jp_parse_obj(JLexer *lx) {
+JsonNode* jp_parse_obj(JLexer *lx, unsigned short int depth) {
     JsonNode *obj = jp_create_node(JND_OBJ);
     JsonNode *tail = NULL;
-    if (!obj) return jp_error("oom (object parsing)");
+    if (!obj) jp_error("oom (object parsing).");
+    if (depth > MAX_NESTING) {
+        jp_error_set_msg("maximum nesting reached.");
+        goto error;
+    }
 
     JToken tok = jl_next(lx);
     
@@ -161,7 +169,7 @@ JsonNode* jp_parse_obj(JLexer *lx) {
         if (tok.type != JTK_COLON)
             goto error_k;
         
-        JsonNode *val = jp_parse_value(lx);
+        JsonNode *val = jp_parse_value(lx, depth);
         if (jp_is_error(val) || !val)
             goto error_k;
         val->key = key;
@@ -175,7 +183,6 @@ JsonNode* jp_parse_obj(JLexer *lx) {
     return obj;
 error_k:
     free(key);
-    printf("FROM HEREEEE\n");
 error:
     jp_free_ast(obj);
     return jp_error(NULL);
@@ -199,7 +206,7 @@ JsonNode* jp_parse(const char *json_str, size_t len) {
     }
 
     jl_init(&lx, json_str, len); // re-initialize lexer for parsing
-    JsonNode *root = jp_parse_obj(&lx);
+    JsonNode *root = jp_parse_obj(&lx, 0);
     return root;
 }
 
@@ -224,7 +231,7 @@ int main(int argc, char *argv[]) {
     }
     */
     
-    char *filename = "./tests/test_array.json";
+    char *filename = "./tests/test.json";
     
     char *json = read_file(filename);
     if(!json) {

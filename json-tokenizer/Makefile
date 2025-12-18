@@ -4,7 +4,7 @@ CFLAGS = -Wall -Wextra -std=c99 -g -I
 OBJ_DIR = obj
 TEST_DIR = tests
 
-SRCS = jsont.c jsonp.c
+SRCS = jsonp.c
 OBJS = $(patsubst %.c, $(OBJ_DIR)/%.o, $(SRCS))
 
 TEST_SRCS = $(TEST_DIR)/test_main.c
@@ -29,3 +29,5 @@ test: $(OBJS) $(TEST_OBJS)
 
 clean:
 	rm -f jsont jsonp *.o
+
+.PHONY: all clean test tokenizer parser

@@ -7,8 +7,11 @@
 #include <assert.h>
 #include "jsont.h"
 
+#ifndef JSONP_H
+#define JSONP_H
+
 #define MAX_TOKENS 1024
-#define MAX_NESTING 64
+#define MAX_NESTING 1
 #define MAX_TEXT_SIZE 
 #define MAX_RANGE_NUM
 
@@ -49,9 +52,9 @@ JsonNode error_node = {
 // Parsing APIs
 JsonNode* jp_parse(const char *json_str, size_t len);
 JsonNode* jp_parse_file(const char*filename);
-JsonNode* jp_parse_obj(JLexer *lx);
-JsonNode* jp_parse_array(JLexer*lx);
-JsonNode* jp_parse_value(JLexer *lx);
+JsonNode* jp_parse_obj(JLexer *lx, unsigned short int depth);
+JsonNode* jp_parse_array(JLexer*lx, unsigned short int depth);
+JsonNode* jp_parse_value(JLexer *lx, unsigned short int depth);
 JsonNode* jp_error(const char* err_msg);
 void jp_error_set_msg(const char* err_msg);
 bool jp_is_error(JsonNode *node);
@@ -104,3 +107,5 @@ static inline char* read_file(const char *filename) {
     fclose(file);
     return content;
 }
+
+#endif
