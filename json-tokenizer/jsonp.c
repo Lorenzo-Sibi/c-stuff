@@ -1,5 +1,15 @@
 #include "jsonp.h"
 
+JsonNode error_node = {
+    .value.err_msg = "Error message not set",
+    .first_child   = NULL,
+    .next_sibling  = NULL,
+    .key           = NULL,
+    .type          = JND_ERROR,
+    .is_integer    = false,
+    .child_size    = 0
+};
+
 static JsonNode* jp_create_node(JNodeType type) {
     JsonNode *node = (JsonNode*)calloc(1, sizeof(JsonNode));
     if (!node) return NULL;
@@ -17,7 +27,12 @@ static void jp_print_ast_rec(JsonNode *node, unsigned depth) {
     if (node->key) printf(" key=\"%s\"", node->key);
     switch (node->type) {
         case JND_STRING: printf(" : \"%s\"", node->value.svalue); break;
-        case JND_NUMBER: printf(" : %g", node->value.nvalue); break;
+        case JND_NUMBER:
+            if (node->is_integer)
+                printf(" : %lld", (long long)node->value.ivalue);
+            else
+                printf(" : %g", node->value.nvalue);
+            break;
         case JND_BOOL:   printf(" : %s", node->value.bvalue ? "true" : "false"); break;
         case JND_NULL:   printf(" : null"); break;
         case JND_ERROR:  printf(" : ERROR: %s", node->value.err_msg); break;
@@ -75,7 +90,15 @@ JsonNode* jp_parse_value(JLexer *lx, unsigned short int depth) {
         }
         case JTK_NUMBER: {
             JsonNode *n = jp_create_node(JND_NUMBER);
-            jl_number_to_double(&tok, &n->value.nvalue);
+            int64_t iv = 0;
+            // Prefer exact integer when possible, fall back to double for fractional/exp numbers.
+            if (jl_number_to_int64(&tok, &iv)) {
+                n->is_integer = true;
+                n->value.ivalue = iv;
+            } else {
+                n->is_integer = false;
+                jl_number_to_double(&tok, &n->value.nvalue);
+            }
             return n;
         }
         case JTK_TRUE: {
@@ -104,7 +127,10 @@ JsonNode* jp_parse_array(JLexer *lx, unsigned short int depth) {
     }
 
     JToken tok = jl_next(lx);
-    if (tok.type != JTK_LBRACK) return jp_error("Error. Expected [' while array parsing.");
+    if (tok.type != JTK_LBRACK) {
+        jp_error_set_msg("Error. Expected [' while array parsing.");
+        goto error;
+    }
     jl_skip_ws(lx);
     if (jl_peek(lx) == ']') { // trivial case "[]"
         jl_next(lx); // consume RBRACK
@@ -112,7 +138,10 @@ JsonNode* jp_parse_array(JLexer *lx, unsigned short int depth) {
     }
     while(1) {
         JsonNode *val = jp_parse_value(lx, depth);
-        if (jp_is_error(val) || !val) goto error;
+        if (jp_is_error(val) || !val) {
+            jp_error_set_msg("Error while parsing array.");
+            goto error;
+        }
 
         if (tail) tail->next_sibling = val;
         else array->first_child = val;
@@ -121,13 +150,14 @@ JsonNode* jp_parse_array(JLexer *lx, unsigned short int depth) {
         tok = jl_next(lx);
         if (tok.type == JTK_RBRACK) break;
         if (tok.type == JTK_COMMA) continue;
+        jp_error_set_msg("Error while parsing array.");
         goto error;
 
     }
     return array;
 error:
     jp_free_ast(array);
-    return jp_error("Error while parsing array.");
+    return jp_error(NULL);
 }
 
 // TODO: find a way to handle the errors which should be compatible with the error handling in jp_parse
@@ -206,14 +236,13 @@ JsonNode* jp_parse(const char *json_str, size_t len) {
     }
 
     jl_init(&lx, json_str, len); // re-initialize lexer for parsing
-    JsonNode *root = jp_parse_obj(&lx, 0);
+    JsonNode *root = jp_parse_value(&lx, 0);
     return root;
 }
 
 JsonNode* jp_parse_file(const char *filename) {
     char *json_str = read_file(filename);
     if (!json_str) {
-        free(json_str);
         return jp_error("Error. Could not read file.");
     }
     size_t len = strlen(json_str);
@@ -222,25 +251,24 @@ JsonNode* jp_parse_file(const char *filename) {
     return root;
 }
 
+/* Demo / manual-testing entry point.
+ * Compilato solo quando viene definita JSONP_DEMO.
+ */
+#ifdef JSONP_DEMO
 int main(int argc, char *argv[]) {
-    
-    /*
-    if (argc != 2) {
-        printf("Usage: %s <json_file>\n", argv[0]);
-        return 1;
+    const char *filename = "./tests/json_files_test/number_cases.json";
+    if (argc == 2) {
+        filename = argv[1];
     }
-    */
-    
-    char *filename = "./tests/test.json";
-    
+
     char *json = read_file(filename);
     if(!json) {
         return 1;
     }
     size_t json_len = strlen(json);
-    
+
     JToken tokens[MAX_TOKENS];
-    
+
     { // Lexing demo
         JLexer lx;
         jl_init(&lx, json, json_len);
@@ -268,8 +296,10 @@ int main(int argc, char *argv[]) {
     if (jp_is_error(root))
         printf("Error message: %s\n", root->value.err_msg);
     printf("\n\n======== Node type: %s\n", nname(root));
-    
+
     jp_free_ast(root);
+    free(json);
 
     return 0;
 }
+#endif

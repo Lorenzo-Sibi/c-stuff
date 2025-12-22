@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <ctype.h>
+#include <errno.h>
 
 #ifndef JSONT_H
 #define JSONT_H
@@ -37,7 +38,7 @@ static inline bool jl_match(JLexer *lx , char c); // Makes the lexer's pointer a
 
 static JToken jl_create_token(JLexer *lx, JTokenType type, const char *start, size_t line, size_t col);
 static JToken jl_error(JLexer *lx, const char *start, size_t line, size_t col, const char *msg);
-void jl_init(JLexer *lx, const char *data, size_t len);
+static void jl_init(JLexer *lx, const char *data, size_t len);
 
 static void jl_skip_ws(JLexer *lx);
 
@@ -49,7 +50,7 @@ static int hex_val(char c);
 
 // Decode a STRING token to UTF-8 malloc'd buffer.
 // Pass token that still includes the surrounding quotes.
-char* jl_string_to_utf8(const JToken *t, const char **err_msg_out);
+static char* jl_string_to_utf8(const JToken *t, const char **err_msg_out);
 
 // Decode a JSON string slice (without quotes) into a freshly malloc'd UTF-8 buffer.
 // Returns NULL on error; sets *err_msg if provided.
@@ -60,14 +61,19 @@ static char* json_decode_string(const char *s, size_t n, const char **err_msg);
 static JToken jl_scan_string(JLexer *lx);
 
 // Convert a NUMBER token to double (strict strtod on a temporary null-terminated copy).
-bool jl_number_to_double(const JToken *t, double *out);
+static bool jl_number_to_double(const JToken *t, double *out);
+
+// Try to convert a NUMBER token to a signed 64-bit integer.
+// Returns true on success, false if the token is not a pure integer literal
+// or if it is out of range for int64_t.
+static bool jl_number_to_int64(const JToken *t, int64_t *out);
 
 static JToken jl_scan_number(JLexer *lx, char first);
 
 static bool jl_consume_kw(JLexer *lx, const char *kw);
 
 
-JToken jl_next(JLexer *lx);
+static JToken jl_next(JLexer *lx);
 
 
 static inline bool jl_at_end(JLexer *lx) { return lx->p >= lx->end; }
@@ -117,7 +123,7 @@ static void jl_skip_ws(JLexer *lx){
     }
 }
 
-void jl_init(JLexer *lx, const char *data, size_t len){
+static void jl_init(JLexer *lx, const char *data, size_t len){
     lx->buf = data; 
     lx->p = data; 
     lx->end = data + len; // end will point at the '\0'
@@ -245,7 +251,6 @@ static JToken jl_scan_number(JLexer *lx, char first) {
         }
     } else {
         if (first == '0') {
-            jl_adv(lx);
             if(isdigit((unsigned char)jl_peek(lx))) return jl_error(lx, start, line, col, "leading zero in number");
         } else
             while (isdigit((unsigned char)jl_peek(lx))) jl_adv(lx); 
@@ -313,7 +318,7 @@ JToken jl_next(JLexer *lx) {
 
 // Decode a STRING token to UTF-8 malloc'd buffer.
 // Pass token that still includes the surrounding quotes.
-char* jl_string_to_utf8(const JToken *t, const char **err_msg_out){
+static char* jl_string_to_utf8(const JToken *t, const char **err_msg_out){
     if (t->type != JTK_STRING || t->length < 2) { if(err_msg_out)*err_msg_out="not a string"; return NULL; }
     const char *s = t->start + 1;
     size_t n = t->length - 2;
@@ -321,7 +326,7 @@ char* jl_string_to_utf8(const JToken *t, const char **err_msg_out){
 }
 
 // Convert a NUMBER token to double (strict strtod on a temporary null-terminated copy).
-bool jl_number_to_double(const JToken *t, double *out){
+static bool jl_number_to_double(const JToken *t, double *out){
     if (t->type != JTK_NUMBER) return false;
     char tmp[128];
     if (t->length < sizeof(tmp)) {
@@ -330,7 +335,8 @@ bool jl_number_to_double(const JToken *t, double *out){
         char *endptr = NULL;
         double v = strtod(tmp, &endptr);
         if (!endptr || *endptr != 0) return false;
-        *out = v; return true;
+        *out = v; 
+        return true;
     }
     // rare: very long numbers
     char *buf = (char*)malloc(t->length + 1);
@@ -341,6 +347,52 @@ bool jl_number_to_double(const JToken *t, double *out){
     free(buf);
     if (ok) *out = v;
     return ok;
+}
+
+// Helper: check if the numeric slice contains any fractional or exponent part.
+// JSON numbers are decimal; if we see '.' or 'e'/'E' we know it's not an integer literal.
+static bool jl_number_is_integral_slice(const char *s, size_t len){
+    for (size_t i = 0; i < len; ++i){
+        char c = s[i];
+        if (c == '.' || c == 'e' || c == 'E')
+            return false;
+    }
+    return true;
+}
+
+static bool jl_number_to_int64(const JToken *t, int64_t *out){
+    if (t->type != JTK_NUMBER) return false;
+    if (!t->start || t->length == 0) return false;
+
+    // Fast reject if there is any fractional/exponent part.
+    if (!jl_number_is_integral_slice(t->start, t->length))
+        return false;
+
+    // Copy to a temporary buffer to ensure null-termination.
+    char buf[128];
+    char *dyn_buf = NULL;
+    char *num_str = NULL;
+    if (t->length < sizeof(buf)) {
+        memcpy(buf, t->start, t->length);
+        buf[t->length] = '\0';
+        num_str = buf;
+    } else {
+        dyn_buf = (char*)malloc(t->length + 1);
+        if (!dyn_buf) return false;
+        memcpy(dyn_buf, t->start, t->length);
+        dyn_buf[t->length] = '\0';
+        num_str = dyn_buf;
+    }
+
+    char *endptr = NULL;
+    errno = 0;
+    long long v = strtoll(num_str, &endptr, 10);
+    bool ok = (endptr && *endptr == '\0' && errno == 0);
+    if (dyn_buf) free(dyn_buf);
+    if (!ok) return false;
+
+    *out = (int64_t)v;
+    return true;
 }
 
 
