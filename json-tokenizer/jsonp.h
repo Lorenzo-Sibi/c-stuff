@@ -10,7 +10,7 @@
 #ifndef JSONP_H
 #define JSONP_H
 
-#define MAX_TOKENS 1024
+#define MAX_TOKENS 25000
 #define MAX_NESTING 64
 #define MAX_TEXT_SIZE 
 #define MAX_RANGE_NUM
@@ -30,15 +30,14 @@ typedef struct JsonNode {
         bool bvalue;
         double nvalue;
         int64_t ivalue;
-        const char *svalue;
-        const char err_msg[256];
+        char *svalue;
+        char *err_msg;
     } value;
     struct JsonNode *first_child; // JDN_PROPERTY can ONLY have 2 children (one for the key and one for the value) while for JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL should be NULL
     struct JsonNode *next_sibling;
     char *key; // Only used if the node is child of an JND_OBJ
     JNodeType type;
     bool is_integer;        // Valid only for JND_NUMBER: true => ivalue is set, false => nvalue is set
-    size_t child_size;      // For JND_STRING, JND_NUMBER, JND_BOOL, and JND_NULL must be 0 while for JND_PROPERTY must be 2
 } JsonNode;
 
 extern JsonNode error_node;

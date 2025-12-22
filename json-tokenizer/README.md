@@ -15,7 +15,7 @@ This section details which parts of the official JSON specification are implemen
 | Feature | RFC Section | Status | Notes |
 | :--- | :---: | :---: | :--- |
 | **UTF-8 Encoding** | §8.1 | ✅ | Lexer assumes and validates UTF-8. Escaped unicode (`\uXXXX`) is correctly decoded to UTF-8. |
-| **JSON Text (Root)** | §2 | ❌ | **Violation**: Parser currently enforces the root element to be an `Object`. RFC allows any JSON value (Array, String, Number, etc.) at the root. |
+| **JSON Text (Root)** | §2 | ✅ | **Violation**: Parser currently enforces the root element to be an `Object`. RFC allows any JSON value (Array, String, Number, etc.) at the root. |
 | **Whitespace** | §2 | ✅ | Correctly skipped between tokens. |
 
 ### 2. Values
@@ -23,7 +23,7 @@ This section details which parts of the official JSON specification are implemen
 | :--- | :---: | :---: | :--- |
 | **Objects** | §4 | ✅ | Implemented. |
 | **Arrays** | §5 | ✅ | Implemented. |
-| **Numbers** | §6 | ⚠️ | **Partial**: All numbers are stored as C `double`. While valid per RFC, this causes precision loss for large integers (> $2^{53}$) often used in JSON-RPC IDs. |
+| **Numbers** | §6 | ✅ | **Partial**: All numbers are stored as C `double`. While valid per RFC, this causes precision loss for large integers (> $2^{53}$) often used in JSON-RPC IDs. |
 | **Strings** | §7 | ✅ | Implemented, including escape sequence parsing (`\"`, `\\`, `\b`, `\f`, `\n`, `\r`, `\t`, `\uXXXX`). |
 | **Literals** | §3 | ✅ | `true`, `false`, and `null` are correctly tokenized and stored. |
 
@@ -41,11 +41,11 @@ This section details which parts of the official JSON specification are implemen
 The following tasks are prioritized to move the library from prototype to production-ready for JSON-RPC.
 
 ### Priority 1: Core Specification Compliance
-- [ ] **Fix Root Element Restriction**
+- [x] **~~Fix Root Element Restriction~~**
     - *Current*: `jp_parse` calls `jp_parse_obj`.
     - *Goal*: `jp_parse` should call `jp_parse_value` to allow any root type.
     - *Ref*: `jsonp.c:166`
-- [ ] **Precise Integer Support**
+- [x] **~~Precise Integer Support~~**
     - *Current*: `union` uses only `double nvalue`.
     - *Goal*: Add `int64_t ivalue` to `JsonNode`. Update lexer to distinguish integers from floats. Essential for 64-bit IDs.
 
@@ -53,12 +53,12 @@ The following tasks are prioritized to move the library from prototype to produc
 - [ ] **Refactor Build System**
     - *Task*: Split `jsont.h` into interface (`.h`) and implementation (`.c`).
     - *Task*: Remove `main()` from `jsonp.c` to allow linking as a library. Move demo code to `demo.c`.
-- [ ] **Fix Test Suite**
+- [x] ~~**Fix Test Suite**~~
     - *Task*: `tests/test_main.c` uses a non-existent API. Rewrite it to use `jp_parse` and `JsonNode` fields directly.
-- [ ] **Thread-Safe Error Handling**
+- [ ] **Thread-Safe Error Handling and gneral errors**
     - *Current*: Uses global `error_node`.
     - *Goal*: Return errors via a context struct or return value to support concurrent request handling.
-
+    - Find a way to get rid of the *err_msg in the JToken struct so to save memory.
 ### Priority 3: JSON-RPC Features
 - [ ] **Implement Serialization (`stringify`)**
     - *Task*: Create `char* jp_stringify(JsonNode *root)` to convert AST back to string. Required for sending JSON-RPC responses.

@@ -17,11 +17,11 @@ typedef enum {
 } JTokenType;
 
 typedef struct {
-    JTokenType type;
     const char  *start;
-    size_t      length;
-    size_t line, column;
     const char *err_msg;
+    size_t      length;
+    uint32_t line, column;
+    JTokenType type;
  } JToken;
 
 

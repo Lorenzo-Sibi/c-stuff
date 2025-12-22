@@ -7,7 +7,6 @@ JsonNode error_node = {
     .key           = NULL,
     .type          = JND_ERROR,
     .is_integer    = false,
-    .child_size    = 0
 };
 
 static JsonNode* jp_create_node(JNodeType type) {
@@ -66,6 +65,8 @@ void jp_free_ast(JsonNode *root) {
     #ifdef DEBUG
         printf("[DEBUG] Freeing %s node.\n", nname(root));
     #endif
+    if (root->type == JND_STRING && root->value.svalue) free(root->value.svalue);
+    if (root->type == JND_ERROR && root->value.err_msg) free(root->value.err_msg);
     if (root->key) free(root->key);
     free(root);
 }
@@ -222,11 +223,9 @@ JsonNode* jp_parse(const char *json_str, size_t len) {
     JLexer lx;
     jl_init(&lx, json_str, len);
 
-    JToken tokens[MAX_TOKENS];
     int i = 0;
     for(;;){
-        tokens[i] = jl_next(&lx);
-        JToken t = tokens[i];
+        JToken t = jl_next(&lx);
         i++;
         if (t.type == JTK_ERROR) {
             fprintf(stderr, "ERROR: %s\n", t.err_msg ? t.err_msg : "token error");
@@ -267,17 +266,14 @@ int main(int argc, char *argv[]) {
     }
     size_t json_len = strlen(json);
 
-    JToken tokens[MAX_TOKENS];
-
     { // Lexing demo
         JLexer lx;
         jl_init(&lx, json, json_len);
         int i = 0;
         for(;;){
-            tokens[i] = jl_next(&lx);
-            JToken t = tokens[i];
+            JToken t = jl_next(&lx);
             i++;
-            printf("%zu:%zu %-6s  '%.*s'\n", t.line, t.column, kname(t.type), (int)t.length, t.start);
+            printf("%u:%u %-6s  '%.*s'\n", t.line, t.column, kname(t.type), (int)t.length, t.start);
             if (t.type == JTK_STRING){
                 const char *err = NULL;
                 char *s = jl_string_to_utf8(&t, &err);
